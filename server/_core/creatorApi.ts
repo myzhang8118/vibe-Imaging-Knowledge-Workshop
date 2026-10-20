@@ -13,6 +13,7 @@ const MAX_REQUESTS_PER_WINDOW = 20;
 const requestWindows = new Map<string, { startedAt: number; count: number }>();
 const DEFAULT_UPSTREAM_TIMEOUT_MS = 25_000;
 const CONNECTION_TEST_TIMEOUT_MS = 60_000;
+const GENERATION_TIMEOUT_MS = 120_000;
 
 function isPublicIPv4(address: string) {
   const parts = address.split(".").map(Number);
@@ -318,7 +319,7 @@ export function registerCreatorApi(app: Express) {
             { role: "user", content: `请围绕以下想法写脚本并拆分分镜：\n\n${body.idea.trim()}` },
           ],
         }),
-      });
+      }, GENERATION_TIMEOUT_MS);
       if (upstream.status >= 300 && upstream.status < 400) return res.status(502).json({ error: "API 地址返回了重定向，请填写最终 HTTPS 地址。" });
       const raw = upstream.text;
       let payload: unknown;
@@ -333,6 +334,9 @@ export function registerCreatorApi(app: Express) {
       const draft = validateDraft(parseJsonObject(content));
       return res.json({ draft });
     } catch (error) {
+      if (error instanceof Error && (error.name === "AbortError" || /aborted/i.test(error.message))) {
+        return res.status(504).json({ error: "模型生成等待超过 120 秒仍无响应；可能是服务商处理较慢或排队较久，请稍后重试。" });
+      }
       const message = error instanceof Error ? safeUpstreamMessage(error.message, apiKey) : "生成失败，请检查模型设置后重试。";
       return res.status(400).json({ error: message });
     }

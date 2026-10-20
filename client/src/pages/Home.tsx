@@ -438,7 +438,7 @@ export default function Home() {
             />
             <div className="idea-footer"><span>{Array.from(draft.idea).length} / 2400</span><button className="sample-idea" onClick={() => setPartialDraft({ idea: "为什么我们越忙，越容易把重要的事拖到最后？请用一个日常小故事，讲清楚即时奖励如何影响注意力。" })}>试试一条选题 <ArrowRight size={14} /></button></div>
             {error && <div className="inline-error" role="alert">{error}</div>}
-            <div className="idea-submit-row"><span className="api-hint"><Sparkles size={15} />生成需要你自己的模型 API</span><button className="button button-primary button-generate" onClick={startProject} disabled={busy}>{busy ? <LoaderCircle size={17} className="spin" /> : <Sparkles size={17} />}{busy ? "模型正在写作…" : "生成脚本与分镜"}<ArrowRight size={16} /></button></div>
+            <div className="idea-submit-row"><span className="api-hint"><Sparkles size={15} />生成需要你自己的模型 API</span><button className="button button-primary button-generate" onClick={startProject} disabled={busy}>{busy ? <LoaderCircle size={17} className="spin" /> : <Sparkles size={17} />}{busy ? "模型正在写作，可能需要一两分钟…" : "生成脚本与分镜"}<ArrowRight size={16} /></button></div>
           </div>
           <div className="setup-callout"><div className="callout-icon"><Settings2 size={19} /></div><div><strong>{apiKey && modelSettings.model ? "模型配置已填写" : "连接自己的模型 API"}</strong><span>{apiKey && modelSettings.model ? `${modelSettings.model} · API Key 仅保存在当前页面内存` : "支持 OpenAI 兼容接口；填写地址、模型名与 API Key 后即可测试"}</span></div><button className="text-button" onClick={() => setSettingsOpen(true)}>{apiKey && modelSettings.model ? "修改配置" : "配置模型"}<ChevronRight size={15} /></button></div>
         </div>
