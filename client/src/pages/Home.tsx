@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { AiAssistDialog, AiAssistPreview } from "@/components/AiAssistDialog";
 import {
   ArrowDown,
   ArrowLeft,
@@ -33,7 +34,10 @@ import {
   loadModelSettings,
   saveCreatorDraft,
   saveModelSettings,
+  requestAiAssist,
   testModelConnection,
+  type AiAssistStage,
+  type AiAssistSuggestion,
   type CreatorDraft,
   type ModelSettings,
   type Scene,
@@ -49,6 +53,15 @@ const STEPS: Step[] = [
   { number: 3, label: "风格", icon: Eye },
   { number: 4, label: "成片", icon: Clapperboard },
 ];
+
+const ASSIST_COPY: Record<AiAssistStage, { title: string; description: string; prompt: string }> = {
+  idea: { title: "AI 帮我完善想法", description: "只生成一个更清晰的选题候选；应用前会保留并对照你的原稿。", prompt: "保留原本要讲的主题，把选题聚焦为一个明确、能吸引观众的问题。" },
+  script: { title: "AI 帮我修改脚本", description: "根据当前选题改写片名、简介和旁白；你可以先对照预览再决定。", prompt: "检查开头吸引力、逻辑衔接和口语感，删去重复内容，并保持事实准确。" },
+  scene: { title: "AI 修改这一镜", description: "只针对选中的镜头生成候选，不会改动其他分镜。", prompt: "让画面更具体、适合用 Canvas 几何动画呈现，并让旁白紧扣这一镜。" },
+  storyboard: { title: "AI 优化全部分镜", description: "结合当前脚本重排和打磨整套镜头；候选会逐镜列出供你检查。", prompt: "优化镜头节奏和先后顺序，避免画面或旁白重复，确保每镜都推进主题。" },
+  style: { title: "AI 推荐画面风格", description: "AI 只会从当前已有的三种风格中推荐一种，并说明理由。", prompt: "结合主题、脚本和分镜，从现有风格中选择最合适的一种，并说明理由。" },
+  final: { title: "成片前 AI 总检", description: "检查并提出整支短片的候选修改；应用后仍可返回各节点继续编辑，不会改写已下载的视频。", prompt: "检查脚本和镜头是否匹配、节奏是否连贯、字幕是否易读；必要时做最少修改，不要编造事实。" },
+};
 
 function getStyle(styleId: StyleId) {
   return VIDEO_STYLES.find(style => style.id === styleId) ?? VIDEO_STYLES[0];
@@ -303,6 +316,7 @@ function StoryboardScene({
   onChange,
   onMove,
   onRemove,
+  onAiImprove,
 }: {
   scene: Scene;
   index: number;
@@ -310,10 +324,12 @@ function StoryboardScene({
   onChange: (value: Scene) => void;
   onMove: (offset: number) => void;
   onRemove: () => void;
+  onAiImprove: () => void;
 }) {
   return (
     <article className="scene-card">
       <div className="scene-number"><span>{String(index + 1).padStart(2, "0")}</span><div className="scene-actions">
+        <button className="icon-button small assist-button" onClick={onAiImprove} aria-label={`AI 修改第 ${index + 1} 个分镜`} title="AI 修改这一镜"><Sparkles size={14} /></button>
         <button className="icon-button small" onClick={() => onMove(-1)} disabled={index === 0} aria-label="上移分镜"><ArrowUp size={14} /></button>
         <button className="icon-button small" onClick={() => onMove(1)} disabled={index === total - 1} aria-label="下移分镜"><ArrowDown size={14} /></button>
         <button className="icon-button small danger" onClick={onRemove} aria-label="删除分镜"><X size={14} /></button>
@@ -335,10 +351,92 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [connectionLabel, setConnectionLabel] = useState("");
+  const [assistTarget, setAssistTarget] = useState<AiAssistStage | null>(null);
+  const [assistSceneId, setAssistSceneId] = useState("");
+  const [assistInstruction, setAssistInstruction] = useState("");
+  const [assistBusy, setAssistBusy] = useState(false);
+  const [assistError, setAssistError] = useState("");
+  const [assistSuggestion, setAssistSuggestion] = useState<AiAssistSuggestion | null>(null);
   const ideaRef = useRef<HTMLTextAreaElement>(null);
   const style = getStyle(draft.styleId);
 
   const setPartialDraft = (patch: Partial<CreatorDraft>) => setDraft(current => ({ ...current, ...patch }));
+
+  const openAiAssist = (target: AiAssistStage, sceneId = "") => {
+    if (!apiKey.trim() || !modelSettings.model.trim()) {
+      setSettingsOpen(true);
+      setError("先配置模型地址、模型名称和 API Key，再使用节点内的 AI 修改。");
+      return;
+    }
+    if (target === "idea" && !draft.idea.trim()) {
+      setError("先写下一个想法，AI 才能帮你完善。");
+      return;
+    }
+    if (target === "storyboard" && draft.scenes.length < 3) {
+      setError("至少保留 3 个镜头，再让 AI 优化整套分镜。");
+      return;
+    }
+    if (target === "scene" && !draft.scenes.some(scene => scene.id === sceneId)) {
+      setError("这个镜头已经不存在，请重新选择。");
+      return;
+    }
+    if (target === "style" && !draft.idea.trim() && !draft.script.trim()) {
+      setError("先填写想法或脚本，再让 AI 推荐风格。");
+      return;
+    }
+    if (target === "final" && (!draft.script.trim() || draft.scenes.length < 3)) {
+      setError("脚本和至少 3 个分镜准备好后，才能进行成片前总检。");
+      return;
+    }
+    setError("");
+    setAssistTarget(target);
+    setAssistSceneId(sceneId);
+    setAssistInstruction(ASSIST_COPY[target].prompt);
+    setAssistSuggestion(null);
+    setAssistError("");
+  };
+
+  const closeAiAssist = () => {
+    if (assistBusy) return;
+    setAssistTarget(null);
+    setAssistSuggestion(null);
+    setAssistError("");
+  };
+
+  const runAiAssist = async () => {
+    if (!assistTarget) return;
+    setAssistBusy(true);
+    setAssistError("");
+    setAssistSuggestion(null);
+    try {
+      const suggestion = await requestAiAssist(modelSettings, apiKey, {
+        stage: assistTarget,
+        instruction: assistInstruction,
+        draft,
+        ...(assistTarget === "scene" ? { sceneId: assistSceneId } : {}),
+      });
+      setAssistSuggestion(suggestion);
+    } catch (reason) {
+      setAssistError(reason instanceof Error ? reason.message : "AI 修改失败，请稍后重试；你的原稿保持不变。");
+    } finally {
+      setAssistBusy(false);
+    }
+  };
+
+  const applyAiSuggestion = () => {
+    if (!assistSuggestion) return;
+    setDraft(current => {
+      switch (assistSuggestion.stage) {
+        case "idea": return { ...current, idea: assistSuggestion.idea };
+        case "script": return { ...current, title: assistSuggestion.title, summary: assistSuggestion.summary, script: assistSuggestion.script };
+        case "scene": return { ...current, scenes: current.scenes.map(scene => scene.id === assistSceneId ? { ...assistSuggestion.scene, id: scene.id } : scene) };
+        case "storyboard": return { ...current, scenes: assistSuggestion.scenes };
+        case "style": return { ...current, styleId: assistSuggestion.styleId };
+        case "final": return { ...current, title: assistSuggestion.title, summary: assistSuggestion.summary, script: assistSuggestion.script, scenes: assistSuggestion.scenes, styleId: assistSuggestion.styleId };
+      }
+    });
+    closeAiAssist();
+  };
 
   useEffect(() => {
     saveCreatorDraft(draft);
@@ -436,7 +534,7 @@ export default function Home() {
               placeholder="例如：为什么有些鸟会把闪亮的小物件带回巢里？想用一个生活化的故事，讲清楚动物如何学习和模仿。"
               rows={6}
             />
-            <div className="idea-footer"><span>{Array.from(draft.idea).length} / 2400</span><button className="sample-idea" onClick={() => setPartialDraft({ idea: "为什么我们越忙，越容易把重要的事拖到最后？请用一个日常小故事，讲清楚即时奖励如何影响注意力。" })}>试试一条选题 <ArrowRight size={14} /></button></div>
+            <div className="idea-footer"><span>{Array.from(draft.idea).length} / 2400</span><div className="idea-footer-actions"><button className="sample-idea" onClick={() => setPartialDraft({ idea: "为什么我们越忙，越容易把重要的事拖到最后？请用一个日常小故事，讲清楚即时奖励如何影响注意力。" })}>试试一条选题 <ArrowRight size={14} /></button><button className="sample-idea" onClick={() => openAiAssist("idea")}><Sparkles size={13} />AI 完善想法</button></div></div>
             {error && <div className="inline-error" role="alert">{error}</div>}
             <div className="idea-submit-row"><span className="api-hint"><Sparkles size={15} />生成需要你自己的模型 API</span><button className="button button-primary button-generate" onClick={startProject} disabled={busy}>{busy ? <LoaderCircle size={17} className="spin" /> : <Sparkles size={17} />}{busy ? "模型正在写作，可能需要一两分钟…" : "生成脚本与分镜"}<ArrowRight size={16} /></button></div>
           </div>
@@ -449,7 +547,7 @@ export default function Home() {
       return (
         <div className="writing-layout">
           <div className="writing-main">
-            <div className="section-heading"><div><p className="eyebrow">01 / SCRIPT DRAFT</p><h2>先让故事站稳</h2><p>这是模型基于你的想法写出的初稿。片名和旁白都可以直接修改。</p></div><span className="draft-badge"><Sparkles size={14} />模型生成 · 可编辑</span></div>
+            <div className="section-heading"><div><p className="eyebrow">01 / SCRIPT DRAFT</p><h2>先让故事站稳</h2><p>这是模型基于你的想法写出的初稿。片名和旁白都可以直接修改。</p></div><div className="stage-heading-actions"><span className="draft-badge"><Sparkles size={14} />模型生成 · 可编辑</span><button className="button button-secondary stage-ai-trigger" onClick={() => openAiAssist("script")}><Sparkles size={14} />AI 修改脚本</button></div></div>
             <label className="field-label" htmlFor="story-title">短片标题</label>
             <input id="story-title" className="title-edit-input" value={draft.title} onChange={event => setPartialDraft({ title: event.target.value })} maxLength={80} />
             <div className="summary-strip"><span>一句话</span><p>{draft.summary || "为这支短片写一句简介"}</p></div>
@@ -467,8 +565,8 @@ export default function Home() {
     if (draft.stage === 2) {
       return (
         <div className="storyboard-stage">
-          <div className="section-heading storyboard-heading"><div><p className="eyebrow">02 / STORYBOARD</p><h2>把旁白拆成画面</h2><p>调整画面描述、字幕和镜头顺序；这些信息会直接进入视频渲染。</p></div><div className="storyboard-stats"><span>{draft.scenes.length} 个镜头</span><span>约 {formatDuration(getDuration(draft.scenes))}</span></div></div>
-          {draft.scenes.length === 0 ? <div className="empty-state"><Layers3 size={22} /><strong>还没有分镜</strong><span>至少保留 3 个镜头，再进入下一步。</span></div> : <div className="scene-list">{draft.scenes.map((scene, index) => <StoryboardScene key={scene.id} scene={scene} index={index} total={draft.scenes.length} onChange={value => updateScene(index, value)} onMove={offset => moveScene(index, offset)} onRemove={() => removeScene(index)} />)}</div>}
+          <div className="section-heading storyboard-heading"><div><p className="eyebrow">02 / STORYBOARD</p><h2>把旁白拆成画面</h2><p>调整画面描述、字幕和镜头顺序；这些信息会直接进入视频渲染。</p></div><div className="storyboard-heading-actions"><div className="storyboard-stats"><span>{draft.scenes.length} 个镜头</span><span>约 {formatDuration(getDuration(draft.scenes))}</span></div><button className="button button-secondary stage-ai-trigger" onClick={() => openAiAssist("storyboard")}><Sparkles size={14} />AI 优化全部</button></div></div>
+          {draft.scenes.length === 0 ? <div className="empty-state"><Layers3 size={22} /><strong>还没有分镜</strong><span>至少保留 3 个镜头，再进入下一步。</span></div> : <div className="scene-list">{draft.scenes.map((scene, index) => <StoryboardScene key={scene.id} scene={scene} index={index} total={draft.scenes.length} onChange={value => updateScene(index, value)} onMove={offset => moveScene(index, offset)} onRemove={() => removeScene(index)} onAiImprove={() => openAiAssist("scene", scene.id)} />)}</div>}
           <button className="add-scene-button" onClick={addScene}><Plus size={16} />添加一个镜头</button>
           {error && <div className="inline-error" role="alert">{error}</div>}
           <div className="step-actions"><button className="button button-secondary" onClick={() => goToStage(1)}><ArrowLeft size={16} />返回脚本</button><button className="button button-primary" onClick={() => { if (draft.scenes.length < 3) { setError("至少保留 3 个镜头，才能进入下一步。"); return; } goToStage(3); }}>分镜确认，挑选风格<ArrowRight size={16} /></button></div>
@@ -479,7 +577,7 @@ export default function Home() {
     if (draft.stage === 3) {
       return (
         <div className="style-stage">
-          <div className="section-heading"><div><p className="eyebrow">03 / VISUAL DIRECTION</p><h2>给知识一个画面气质</h2><p>选一套色彩和图形语言。它会应用到每个镜头的代码动画与字幕。</p></div><span className="style-count">03 styles / 01 selected</span></div>
+          <div className="section-heading"><div><p className="eyebrow">03 / VISUAL DIRECTION</p><h2>给知识一个画面气质</h2><p>选一套色彩和图形语言。它会应用到每个镜头的代码动画与字幕。</p></div><div className="stage-heading-actions"><span className="style-count">03 styles / 01 selected</span><button className="button button-secondary stage-ai-trigger" onClick={() => openAiAssist("style")}><Sparkles size={14} />AI 推荐风格</button></div></div>
           <div className="style-options">{VIDEO_STYLES.map((item, index) => <button key={item.id} className={`style-card ${draft.styleId === item.id ? "selected" : ""} style-card-${item.id}`} onClick={() => setPartialDraft({ styleId: item.id })} aria-pressed={draft.styleId === item.id}>
             <div className="style-art"><span className="art-kicker">FRAME {String(index + 1).padStart(2, "0")}</span><div className={`art-visual art-visual-${item.id}`}><i /><b /><em /></div><span className="art-line" /></div>
             <div className="style-card-info"><div><strong>{item.title}</strong><span>{item.subtitle}</span></div>{draft.styleId === item.id && <span className="selected-check"><Check size={14} /></span>}</div><p>{item.detail}</p>
@@ -493,7 +591,8 @@ export default function Home() {
 
     return (
       <div className="final-stage">
-        <div className="section-heading final-heading"><div><p className="eyebrow">04 / FINAL CUT</p><h2>最后一步，生成成片</h2><p>先播放动态样片确认节奏。满意后开始完整录制并下载文件。</p></div><span className="ready-badge"><span className="live-dot" />素材已就绪</span></div>
+        <div className="section-heading final-heading"><div><p className="eyebrow">04 / FINAL CUT</p><h2>最后一步，生成成片</h2><p>先播放动态样片确认节奏。满意后开始完整录制并下载文件。</p></div><div className="stage-heading-actions"><span className="ready-badge"><span className="live-dot" />素材已就绪</span><button className="button button-secondary stage-ai-trigger" onClick={() => openAiAssist("final")}><Sparkles size={14} />成片前 AI 总检</button></div></div>
+        {error && <div className="inline-error" role="alert">{error}</div>}
         {draft.scenes.length < 3 ? <div className="empty-state"><strong>分镜不足</strong><span>请返回分镜步骤，至少保留 3 个镜头。</span><button className="button button-secondary" onClick={() => goToStage(2)}>修改分镜</button></div> : <VideoRenderer key={`${draft.scenes.map(scene => scene.id).join(",")}-${draft.styleId}`} scenes={draft.scenes} styleId={draft.styleId} title={draft.title} />}
         <div className="step-actions final-step-actions"><button className="button button-secondary" onClick={() => goToStage(3)}><ArrowLeft size={16} />返回风格</button><button className="button button-quiet" onClick={resetProject}>新建另一支短片<Plus size={15} /></button></div>
       </div>
@@ -534,6 +633,21 @@ export default function Home() {
       </main>
 
       {isSettingsOpen && <ModelSettingsDialog open={isSettingsOpen} onClose={() => setSettingsOpen(false)} settings={modelSettings} setSettings={value => { setModelSettings(value); setConnectionLabel(""); }} apiKey={apiKey} setApiKey={setApiKey} />}
+      <AiAssistDialog
+        open={Boolean(assistTarget)}
+        title={assistTarget === "scene" && assistSceneId ? `AI 修改：${draft.scenes.find(scene => scene.id === assistSceneId)?.title || "当前分镜"}` : assistTarget ? ASSIST_COPY[assistTarget].title : "AI 修改"}
+        description={assistTarget ? ASSIST_COPY[assistTarget].description : ""}
+        instruction={assistInstruction}
+        onInstructionChange={setAssistInstruction}
+        busy={assistBusy}
+        error={assistError}
+        hasSuggestion={Boolean(assistSuggestion)}
+        onGenerate={runAiAssist}
+        onApply={applyAiSuggestion}
+        onClose={closeAiAssist}
+      >
+        {assistSuggestion && <AiAssistPreview suggestion={assistSuggestion} previous={draft} />}
+      </AiAssistDialog>
     </div>
   );
 }

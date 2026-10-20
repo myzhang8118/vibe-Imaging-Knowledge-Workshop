@@ -30,6 +30,23 @@ export type CreatorDraft = {
   stage: number;
 };
 
+export type AiAssistStage = "idea" | "script" | "scene" | "storyboard" | "style" | "final";
+
+export type AiAssistRequest = {
+  stage: AiAssistStage;
+  instruction: string;
+  draft: CreatorDraft;
+  sceneId?: string;
+};
+
+export type AiAssistSuggestion =
+  | { stage: "idea"; idea: string; explanation: string }
+  | { stage: "script"; title: string; summary: string; script: string; explanation: string }
+  | { stage: "scene"; scene: Scene; explanation: string }
+  | { stage: "storyboard"; scenes: Scene[]; explanation: string }
+  | { stage: "style"; styleId: StyleId; explanation: string }
+  | { stage: "final"; title: string; summary: string; script: string; scenes: Scene[]; styleId: StyleId; explanation: string };
+
 export const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   baseUrl: "https://api.openai.com/v1",
   model: "",
@@ -131,4 +148,18 @@ export async function generateDraft(settings: ModelSettings, apiKey: string, ide
   const payload = await response.json().catch(() => ({})) as { draft?: GeneratedDraft; error?: string };
   if (!response.ok || !payload.draft) throw new Error(payload.error || `脚本生成失败（HTTP ${response.status}）`);
   return payload.draft;
+}
+
+export async function requestAiAssist(settings: ModelSettings, apiKey: string, request: AiAssistRequest): Promise<AiAssistSuggestion> {
+  const response = await fetch("/api/creator/assist", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({ ...settings, apiKey, ...request }),
+  });
+  const payload = await response.json().catch(() => ({})) as { suggestion?: AiAssistSuggestion; error?: string };
+  if (!response.ok || !payload.suggestion || payload.suggestion.stage !== request.stage) {
+    throw new Error(payload.error || `AI 修改失败（HTTP ${response.status}）`);
+  }
+  return payload.suggestion;
 }
