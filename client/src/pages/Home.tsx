@@ -105,7 +105,7 @@ function ModelSettingsDialog({
       return;
     }
     setChecking(true);
-    setResult({ tone: "idle", text: "正在发送最短模型请求…" });
+    setResult({ tone: "idle", text: "正在等待模型响应（最长约 60 秒）…" });
     try {
       const response = await testModelConnection(settings, apiKey);
       setResult({ tone: "success", text: `连接成功。模型 ${response.model} 已返回有效回复。` });
@@ -133,7 +133,7 @@ function ModelSettingsDialog({
         <p className="eyebrow">连接你的创作引擎</p>
         <h2 id="settings-title">模型 API 配置</h2>
         <p className="modal-description">支持 OpenAI Chat Completions 兼容接口。配置后可测试连接，并用模型生成真实脚本与分镜。</p>
-        <span className="field-hint">连接测试会实际调用所选模型，最多生成 8 个输出 Token；服务商可能收取少量费用。</span>
+        <span className="field-hint">连接测试会实际调用所选模型，最多生成 8 个输出 Token，最长等待 60 秒；服务商可能收取少量费用。</span>
 
         <label className="field-label" htmlFor="base-url">API Base URL</label>
         <input

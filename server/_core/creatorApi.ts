@@ -11,6 +11,8 @@ type ModelInput = {
 const WINDOW_MS = 60_000;
 const MAX_REQUESTS_PER_WINDOW = 20;
 const requestWindows = new Map<string, { startedAt: number; count: number }>();
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 25_000;
+const CONNECTION_TEST_TIMEOUT_MS = 60_000;
 
 function isPublicIPv4(address: string) {
   const parts = address.split(".").map(Number);
@@ -136,9 +138,9 @@ function safeUpstreamMessage(raw: string, apiKey: string) {
   return message.replace(/Bearer\s+[^\s"']+/gi, "Bearer [已隐藏]").replace(/<[^>]*>/g, " ").slice(0, 240);
 }
 
-async function requestUpstream(url: string, apiKey: string, init?: RequestInit) {
+async function requestUpstream(url: string, apiKey: string, init?: RequestInit, timeoutMs = DEFAULT_UPSTREAM_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 25_000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
       ...init,
@@ -267,7 +269,7 @@ export function registerCreatorApi(app: Express) {
           max_tokens: 8,
           temperature: 0,
         }),
-      });
+      }, CONNECTION_TEST_TIMEOUT_MS);
       if (upstream.status >= 300 && upstream.status < 400) {
         return res.status(502).json({ error: "API 地址返回了重定向，请填写最终 HTTPS 地址。" });
       }
@@ -284,6 +286,9 @@ export function registerCreatorApi(app: Express) {
       if (!reply.trim()) return res.status(502).json({ error: "模型接口已响应，但没有返回可见文本；请检查所选模型的 Chat Completions 兼容性。" });
       return res.json({ ok: true, model: credentials.model });
     } catch (error) {
+      if (error instanceof Error && (error.name === "AbortError" || /aborted/i.test(error.message))) {
+        return res.status(504).json({ error: "模型连接测试等待超过 60 秒仍无响应；可能是服务商排队较久或接口暂不可用，请稍后重试。" });
+      }
       const message = error instanceof Error ? safeUpstreamMessage(error.message, apiKey) : "模型连接失败，请检查设置。";
       return res.status(400).json({ error: message });
     }
