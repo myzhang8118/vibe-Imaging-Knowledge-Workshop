@@ -1,4 +1,4 @@
-import { VIDEO_STYLES, type Scene, type StyleId } from "./creator";
+import { createDefaultVisualElements, isSceneReferenceText, VIDEO_STYLES, type Scene, type StyleId, type VisualColor, type VisualElement } from "./creator";
 
 export type RenderOptions = {
   scenes: Scene[];
@@ -44,6 +44,66 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, maxWidth: number,
   return lines;
 }
 
+function colorFor(token: VisualColor, accent: string) {
+  if (token === "accent") return accent;
+  if (token === "warm") return "#f0a878";
+  if (token === "cool") return "#74c8e8";
+  if (token === "light") return "#f3f2ec";
+  return "#92a8b8";
+}
+
+function drawVisualElement(ctx: CanvasRenderingContext2D, element: VisualElement, accent: string, progress: number) {
+  const x = element.x * WIDTH;
+  const y = element.y * HEIGHT;
+  const width = element.width * WIDTH;
+  const height = element.height * HEIGHT;
+  const color = colorFor(element.color, accent);
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate((element.rotation * Math.PI) / 180 + Math.sin(progress * Math.PI * 2) * 0.025);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = `${color}24`;
+  ctx.lineWidth = Math.max(2, WIDTH * 0.003);
+  ctx.shadowColor = color;
+  ctx.shadowBlur = element.color === "muted" ? 0 : 18;
+
+  if (element.type === "circle") {
+    ctx.beginPath();
+    ctx.ellipse(0, 0, Math.max(8, Math.abs(width) / 2), Math.max(8, Math.abs(height) / 2), 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  } else if (element.type === "rect") {
+    drawRoundedRect(ctx, -Math.abs(width) / 2, -Math.abs(height) / 2, Math.max(12, Math.abs(width)), Math.max(12, Math.abs(height)), 18);
+    ctx.fill();
+    ctx.stroke();
+  } else if (element.type === "line" || element.type === "arrow") {
+    const dx = width / 2;
+    const dy = height / 2;
+    ctx.beginPath();
+    ctx.moveTo(-dx, -dy);
+    ctx.lineTo(dx, dy);
+    ctx.stroke();
+    if (element.type === "arrow") {
+      const angle = Math.atan2(dy, dx);
+      const head = 17;
+      ctx.beginPath();
+      ctx.moveTo(dx, dy);
+      ctx.lineTo(dx - head * Math.cos(angle - Math.PI / 6), dy - head * Math.sin(angle - Math.PI / 6));
+      ctx.moveTo(dx, dy);
+      ctx.lineTo(dx - head * Math.cos(angle + Math.PI / 6), dy - head * Math.sin(angle + Math.PI / 6));
+      ctx.stroke();
+    }
+  } else if (element.type === "text" && element.text) {
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = color;
+    ctx.font = "600 26px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(element.text.slice(0, 36), 0, 0, Math.min(WIDTH * 0.72, Math.max(100, Math.abs(width))));
+  }
+  ctx.restore();
+}
+
 export function drawSceneFrame(
   ctx: CanvasRenderingContext2D,
   scene: Scene,
@@ -60,23 +120,6 @@ export function drawSceneFrame(
   ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
   const accent = style.color;
-  const hue = (index * 67 + 18) % 360;
-  ctx.save();
-  ctx.globalAlpha = 0.17;
-  ctx.fillStyle = `hsl(${hue} 75% 60%)`;
-  ctx.beginPath();
-  ctx.arc(555 - (index % 2) * 80, 330 + Math.sin(progress * Math.PI * 2) * 26, 182 + Math.sin(progress * Math.PI) * 20, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.globalAlpha = 0.45;
-  ctx.strokeStyle = accent;
-  ctx.lineWidth = 1.5;
-  for (let ring = 0; ring < 3; ring += 1) {
-    ctx.beginPath();
-    ctx.ellipse(360, 350, 128 + ring * 34, 40 + ring * 13, -0.42 + progress * 0.15, 0, Math.PI * 2);
-    ctx.stroke();
-  }
-  ctx.restore();
-
   const padding = 64;
   ctx.fillStyle = accent;
   ctx.font = "600 20px system-ui, sans-serif";
@@ -91,33 +134,10 @@ export function drawSceneFrame(
   ctx.fillStyle = accent;
   ctx.fill();
 
-  ctx.fillStyle = "rgba(255,255,255,.50)";
-  ctx.font = "500 19px system-ui, sans-serif";
-  const title = scene.title || `镜头 ${index + 1}`;
-  ctx.fillText(title.slice(0, 24), padding, 232);
-
-  ctx.fillStyle = "#f6f4ef";
-  ctx.font = "700 51px system-ui, sans-serif";
-  const visualLines = wrapText(ctx, scene.visual || "画面待补充", WIDTH - padding * 2, 72, 5);
-  visualLines.forEach((line, lineIndex) => ctx.fillText(line, padding, 318 + lineIndex * 72));
-
-  const shapeY = Math.min(720, 500 + visualLines.length * 54);
-  ctx.save();
-  ctx.translate(WIDTH / 2, shapeY + 70);
-  ctx.rotate(-0.08 + progress * 0.05);
-  drawRoundedRect(ctx, -138, -96, 276, 192, 20);
-  ctx.fillStyle = "rgba(255,255,255,.045)";
-  ctx.fill();
-  ctx.strokeStyle = `${accent}8a`;
-  ctx.lineWidth = 2;
-  ctx.stroke();
-  ctx.fillStyle = accent;
-  ctx.font = "600 22px system-ui, sans-serif";
-  ctx.textAlign = "center";
-  const visualCaption = scene.visual || "画面构想";
-  const captionLines = wrapText(ctx, visualCaption, 220, 32, 3);
-  captionLines.forEach((line, lineIndex) => ctx.fillText(line, 0, -12 + lineIndex * 32));
-  ctx.restore();
+  // `scene.visual` is an editing note only. Never draw it or the scene title into preview/export.
+  const sourceElements = scene.visualElements?.length ? scene.visualElements : createDefaultVisualElements(scene, index);
+  const elements = sourceElements.filter(element => element.type !== "text" || !isSceneReferenceText(element.text ?? "", scene));
+  elements.forEach(element => drawVisualElement(ctx, element, accent, progress));
 
   const narrativeY = HEIGHT - 330;
   ctx.fillStyle = accent;

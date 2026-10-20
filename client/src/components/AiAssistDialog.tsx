@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Check, LoaderCircle, Sparkles, X } from "lucide-react";
 import { VIDEO_STYLES, type AiAssistSuggestion, type CreatorDraft, type Scene, type StyleId } from "@/lib/creator";
+import { SceneFrameCanvas } from "@/components/SceneFrameCanvas";
 
 type AiAssistDialogProps = {
   open: boolean;
@@ -90,6 +91,24 @@ export function AiAssistPreview({ suggestion, previous }: { suggestion: AiAssist
     case "scene": {
       const original = previous.scenes.find(item => item.id === suggestion.scene.id);
       content = <div className="assist-compare-grid"><ComparePane label="当前分镜" value={sceneText(original)} /><ComparePane label="AI 候选分镜" value={sceneText(suggestion.scene)} /></div>;
+      break;
+    }
+    case "visual": {
+      const originalIndex = previous.scenes.findIndex(item => item.id === suggestion.scene.id);
+      const original = previous.scenes[originalIndex];
+      if (!original) {
+        content = <ComparePane label="预览" value="目标镜头已不存在，请关闭后重新选择。" />;
+        break;
+      }
+      content = (
+        <div className="assist-frame-review">
+          <div className="assist-frame-grid">
+            <article className="assist-frame-pane"><span>修改前 · 实际画面</span><SceneFrameCanvas scene={original} index={originalIndex} total={previous.scenes.length} styleId={previous.styleId} className="assist-frame-canvas" progress={0.28} /></article>
+            <article className="assist-frame-pane"><span>AI 修改候选 · 实际画面</span><SceneFrameCanvas scene={suggestion.scene} index={originalIndex} total={previous.scenes.length} styleId={previous.styleId} className="assist-frame-canvas" progress={0.28} /></article>
+          </div>
+          <p className="assist-frame-note">画面元素：{original.visualElements.length} 个 → {suggestion.scene.visualElements.length} 个。仅应用后才会更新这一个镜头；分镜描述、旁白和其他镜头保持不变。</p>
+        </div>
+      );
       break;
     }
     case "storyboard":

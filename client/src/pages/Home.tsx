@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AiAssistDialog, AiAssistPreview } from "@/components/AiAssistDialog";
+import { VisualPreviewStage } from "@/components/VisualPreviewStage";
 import {
   ArrowDown,
   ArrowLeft,
@@ -29,6 +30,7 @@ import {
   DEFAULT_MODEL_SETTINGS,
   VIDEO_STYLES,
   clearCreatorDraft,
+  createDefaultVisualElements,
   generateDraft,
   loadCreatorDraft,
   loadModelSettings,
@@ -50,14 +52,16 @@ const STEPS: Step[] = [
   { number: 0, label: "想法", icon: Sparkles },
   { number: 1, label: "脚本", icon: FileText },
   { number: 2, label: "分镜", icon: Layers3 },
-  { number: 3, label: "风格", icon: Eye },
-  { number: 4, label: "成片", icon: Clapperboard },
+  { number: 3, label: "画面预览", icon: Eye },
+  { number: 4, label: "风格", icon: Film },
+  { number: 5, label: "成片", icon: Clapperboard },
 ];
 
 const ASSIST_COPY: Record<AiAssistStage, { title: string; description: string; prompt: string }> = {
   idea: { title: "AI 帮我完善想法", description: "只生成一个更清晰的选题候选；应用前会保留并对照你的原稿。", prompt: "保留原本要讲的主题，把选题聚焦为一个明确、能吸引观众的问题。" },
   script: { title: "AI 帮我修改脚本", description: "根据当前选题改写片名、简介和旁白；你可以先对照预览再决定。", prompt: "检查开头吸引力、逻辑衔接和口语感，删去重复内容，并保持事实准确。" },
   scene: { title: "AI 修改这一镜", description: "只针对选中的镜头生成候选，不会改动其他分镜。", prompt: "让画面更具体、适合用 Canvas 几何动画呈现，并让旁白紧扣这一镜。" },
+  visual: { title: "AI 直接修改当前画面", description: "描述你希望画面哪里发生什么变化。AI 会编辑 Canvas 实际绘制的图形元素，并展示修改前后的画面对比；分镜文字和其他镜头不受影响。", prompt: "把中心图形移到右侧，将轨道线删掉，改为三根由低到高的暖色柱形；保留当前旁白。" },
   storyboard: { title: "AI 优化全部分镜", description: "结合当前脚本重排和打磨整套镜头；候选会逐镜列出供你检查。", prompt: "优化镜头节奏和先后顺序，避免画面或旁白重复，确保每镜都推进主题。" },
   style: { title: "AI 推荐画面风格", description: "AI 只会从当前已有的三种风格中推荐一种，并说明理由。", prompt: "结合主题、脚本和分镜，从现有风格中选择最合适的一种，并说明理由。" },
   final: { title: "成片前 AI 总检", description: "检查并提出整支短片的候选修改；应用后仍可返回各节点继续编辑，不会改写已下载的视频。", prompt: "检查脚本和镜头是否匹配、节奏是否连贯、字幕是否易读；必要时做最少修改，不要编造事实。" },
@@ -80,7 +84,7 @@ function formatDuration(value: number) {
 function getStoryStatus(stage: number, scenes: Scene[], idea: string) {
   if (!idea.trim()) return "等待灵感";
   if (stage === 0) return "准备开始";
-  if (stage === 4 && scenes.length > 0) return "待生成成片";
+  if (stage === 5 && scenes.length > 0) return "待生成成片";
   return "创作进行中";
 }
 
@@ -376,7 +380,7 @@ export default function Home() {
       setError("至少保留 3 个镜头，再让 AI 优化整套分镜。");
       return;
     }
-    if (target === "scene" && !draft.scenes.some(scene => scene.id === sceneId)) {
+    if ((target === "scene" || target === "visual") && !draft.scenes.some(scene => scene.id === sceneId)) {
       setError("这个镜头已经不存在，请重新选择。");
       return;
     }
@@ -413,7 +417,7 @@ export default function Home() {
         stage: assistTarget,
         instruction: assistInstruction,
         draft,
-        ...(assistTarget === "scene" ? { sceneId: assistSceneId } : {}),
+        ...((assistTarget === "scene" || assistTarget === "visual") ? { sceneId: assistSceneId } : {}),
       });
       setAssistSuggestion(suggestion);
     } catch (reason) {
@@ -430,6 +434,7 @@ export default function Home() {
         case "idea": return { ...current, idea: assistSuggestion.idea };
         case "script": return { ...current, title: assistSuggestion.title, summary: assistSuggestion.summary, script: assistSuggestion.script };
         case "scene": return { ...current, scenes: current.scenes.map(scene => scene.id === assistSceneId ? { ...assistSuggestion.scene, id: scene.id } : scene) };
+        case "visual": return { ...current, scenes: current.scenes.map(scene => scene.id === assistSceneId ? { ...scene, visualElements: assistSuggestion.scene.visualElements } : scene) };
         case "storyboard": return { ...current, scenes: assistSuggestion.scenes };
         case "style": return { ...current, styleId: assistSuggestion.styleId };
         case "final": return { ...current, title: assistSuggestion.title, summary: assistSuggestion.summary, script: assistSuggestion.script, scenes: assistSuggestion.scenes, styleId: assistSuggestion.styleId };
@@ -443,7 +448,7 @@ export default function Home() {
   }, [draft]);
 
   const wordCount = useMemo(() => Array.from(draft.script).filter(character => !/\s/.test(character)).length, [draft.script]);
-  const maxStage = draft.scenes.length > 0 && draft.script.trim() ? 4 : 0;
+  const maxStage = draft.scenes.length > 0 && draft.script.trim() ? 5 : 0;
   const status = getStoryStatus(draft.stage, draft.scenes, draft.idea);
 
   const startProject = () => {
@@ -493,16 +498,18 @@ export default function Home() {
   };
 
   const addScene = () => {
-    setDraft(current => ({
-      ...current,
-      scenes: [...current.scenes, {
+    setDraft(current => {
+      const scene: Scene = {
         id: `scene-${Date.now()}`,
         title: `新镜头 ${current.scenes.length + 1}`,
         visual: "描述这一镜头的画面",
+        visualElements: [],
         narration: "填写与画面对应的旁白字幕",
         duration: 5,
-      }],
-    }));
+      };
+      scene.visualElements = createDefaultVisualElements(scene, current.scenes.length);
+      return { ...current, scenes: [...current.scenes, scene] };
+    });
   };
 
   const resetProject = () => {
@@ -565,36 +572,40 @@ export default function Home() {
     if (draft.stage === 2) {
       return (
         <div className="storyboard-stage">
-          <div className="section-heading storyboard-heading"><div><p className="eyebrow">02 / STORYBOARD</p><h2>把旁白拆成画面</h2><p>调整画面描述、字幕和镜头顺序；这些信息会直接进入视频渲染。</p></div><div className="storyboard-heading-actions"><div className="storyboard-stats"><span>{draft.scenes.length} 个镜头</span><span>约 {formatDuration(getDuration(draft.scenes))}</span></div><button className="button button-secondary stage-ai-trigger" onClick={() => openAiAssist("storyboard")}><Sparkles size={14} />AI 优化全部</button></div></div>
+          <div className="section-heading storyboard-heading"><div><p className="eyebrow">02 / STORYBOARD</p><h2>把旁白拆成画面</h2><p>在这里调整画面构想、旁白和镜头顺序；下一步会预览真正绘制的画面，画面描述不会变成正片字幕。</p></div><div className="storyboard-heading-actions"><div className="storyboard-stats"><span>{draft.scenes.length} 个镜头</span><span>约 {formatDuration(getDuration(draft.scenes))}</span></div><button className="button button-secondary stage-ai-trigger" onClick={() => openAiAssist("storyboard")}><Sparkles size={14} />AI 优化全部</button></div></div>
           {draft.scenes.length === 0 ? <div className="empty-state"><Layers3 size={22} /><strong>还没有分镜</strong><span>至少保留 3 个镜头，再进入下一步。</span></div> : <div className="scene-list">{draft.scenes.map((scene, index) => <StoryboardScene key={scene.id} scene={scene} index={index} total={draft.scenes.length} onChange={value => updateScene(index, value)} onMove={offset => moveScene(index, offset)} onRemove={() => removeScene(index)} onAiImprove={() => openAiAssist("scene", scene.id)} />)}</div>}
           <button className="add-scene-button" onClick={addScene}><Plus size={16} />添加一个镜头</button>
           {error && <div className="inline-error" role="alert">{error}</div>}
-          <div className="step-actions"><button className="button button-secondary" onClick={() => goToStage(1)}><ArrowLeft size={16} />返回脚本</button><button className="button button-primary" onClick={() => { if (draft.scenes.length < 3) { setError("至少保留 3 个镜头，才能进入下一步。"); return; } goToStage(3); }}>分镜确认，挑选风格<ArrowRight size={16} /></button></div>
+          <div className="step-actions"><button className="button button-secondary" onClick={() => goToStage(1)}><ArrowLeft size={16} />返回脚本</button><button className="button button-primary" onClick={() => { if (draft.scenes.length < 3) { setError("至少保留 3 个镜头，才能进入下一步。"); return; } goToStage(3); }}>分镜确认，查看画面<ArrowRight size={16} /></button></div>
         </div>
       );
     }
 
     if (draft.stage === 3) {
+      return <VisualPreviewStage scenes={draft.scenes} styleId={draft.styleId} error={error} onAiImprove={sceneId => openAiAssist("visual", sceneId)} onBack={() => goToStage(2)} onContinue={() => goToStage(4)} />;
+    }
+
+    if (draft.stage === 4) {
       return (
         <div className="style-stage">
-          <div className="section-heading"><div><p className="eyebrow">03 / VISUAL DIRECTION</p><h2>给知识一个画面气质</h2><p>选一套色彩和图形语言。它会应用到每个镜头的代码动画与字幕。</p></div><div className="stage-heading-actions"><span className="style-count">03 styles / 01 selected</span><button className="button button-secondary stage-ai-trigger" onClick={() => openAiAssist("style")}><Sparkles size={14} />AI 推荐风格</button></div></div>
+          <div className="section-heading"><div><p className="eyebrow">04 / VISUAL DIRECTION</p><h2>给知识一个画面气质</h2><p>选一套色彩和图形语言。它会应用到每个镜头的代码动画与字幕。</p></div><div className="stage-heading-actions"><span className="style-count">03 styles / 01 selected</span><button className="button button-secondary stage-ai-trigger" onClick={() => openAiAssist("style")}><Sparkles size={14} />AI 推荐风格</button></div></div>
           <div className="style-options">{VIDEO_STYLES.map((item, index) => <button key={item.id} className={`style-card ${draft.styleId === item.id ? "selected" : ""} style-card-${item.id}`} onClick={() => setPartialDraft({ styleId: item.id })} aria-pressed={draft.styleId === item.id}>
             <div className="style-art"><span className="art-kicker">FRAME {String(index + 1).padStart(2, "0")}</span><div className={`art-visual art-visual-${item.id}`}><i /><b /><em /></div><span className="art-line" /></div>
             <div className="style-card-info"><div><strong>{item.title}</strong><span>{item.subtitle}</span></div>{draft.styleId === item.id && <span className="selected-check"><Check size={14} /></span>}</div><p>{item.detail}</p>
           </button>)}</div>
-          <div className="style-summary"><span className="style-color-dot" style={{ background: style.color }} /><div><strong>当前选择：{style.title}</strong><span>这套风格将贯穿 {draft.scenes.length} 个分镜。</span></div><button className="text-button" onClick={() => goToStage(4)}>预览画布<ArrowRight size={15} /></button></div>
+          <div className="style-summary"><span className="style-color-dot" style={{ background: style.color }} /><div><strong>当前选择：{style.title}</strong><span>这套风格将贯穿 {draft.scenes.length} 个分镜。</span></div><button className="text-button" onClick={() => goToStage(3)}>返回画面预览<ArrowRight size={15} /></button></div>
           {error && <div className="inline-error" role="alert">{error}</div>}
-          <div className="step-actions"><button className="button button-secondary" onClick={() => goToStage(2)}><ArrowLeft size={16} />返回分镜</button><button className="button button-primary" onClick={() => goToStage(4)}>确认风格，进入成片<ArrowRight size={16} /></button></div>
+          <div className="step-actions"><button className="button button-secondary" onClick={() => goToStage(3)}><ArrowLeft size={16} />返回画面预览</button><button className="button button-primary" onClick={() => goToStage(5)}>确认风格，进入成片<ArrowRight size={16} /></button></div>
         </div>
       );
     }
 
     return (
       <div className="final-stage">
-        <div className="section-heading final-heading"><div><p className="eyebrow">04 / FINAL CUT</p><h2>最后一步，生成成片</h2><p>先播放动态样片确认节奏。满意后开始完整录制并下载文件。</p></div><div className="stage-heading-actions"><span className="ready-badge"><span className="live-dot" />素材已就绪</span><button className="button button-secondary stage-ai-trigger" onClick={() => openAiAssist("final")}><Sparkles size={14} />成片前 AI 总检</button></div></div>
+        <div className="section-heading final-heading"><div><p className="eyebrow">05 / FINAL CUT</p><h2>最后一步，生成成片</h2><p>先播放动态样片确认节奏。满意后开始完整录制并下载文件。</p></div><div className="stage-heading-actions"><span className="ready-badge"><span className="live-dot" />素材已就绪</span><button className="button button-secondary stage-ai-trigger" onClick={() => openAiAssist("final")}><Sparkles size={14} />成片前 AI 总检</button></div></div>
         {error && <div className="inline-error" role="alert">{error}</div>}
-        {draft.scenes.length < 3 ? <div className="empty-state"><strong>分镜不足</strong><span>请返回分镜步骤，至少保留 3 个镜头。</span><button className="button button-secondary" onClick={() => goToStage(2)}>修改分镜</button></div> : <VideoRenderer key={`${draft.scenes.map(scene => scene.id).join(",")}-${draft.styleId}`} scenes={draft.scenes} styleId={draft.styleId} title={draft.title} />}
-        <div className="step-actions final-step-actions"><button className="button button-secondary" onClick={() => goToStage(3)}><ArrowLeft size={16} />返回风格</button><button className="button button-quiet" onClick={resetProject}>新建另一支短片<Plus size={15} /></button></div>
+        {draft.scenes.length < 3 ? <div className="empty-state"><strong>分镜不足</strong><span>请返回分镜步骤，至少保留 3 个镜头。</span><button className="button button-secondary" onClick={() => goToStage(2)}>修改分镜</button></div> : <VideoRenderer key={`${draft.styleId}-${JSON.stringify(draft.scenes.map(scene => ({ id: scene.id, visualElements: scene.visualElements, narration: scene.narration })))}`} scenes={draft.scenes} styleId={draft.styleId} title={draft.title} />}
+        <div className="step-actions final-step-actions"><button className="button button-secondary" onClick={() => goToStage(4)}><ArrowLeft size={16} />返回风格</button><button className="button button-quiet" onClick={resetProject}>新建另一支短片<Plus size={15} /></button></div>
       </div>
     );
   };
@@ -607,7 +618,7 @@ export default function Home() {
         <div className="workspace-label">工作台</div>
         <button className="side-nav-item active"><span className="nav-icon"><Clapperboard size={17} /></span><span>创作一支短片</span><span className="nav-arrow"><ChevronRight size={15} /></span></button>
         <div className="sidebar-divider lower" />
-        <div className="sidebar-prompt"><div className="prompt-mark"><Sparkles size={15} /></div><strong>想法先行</strong><p>写下想讲清楚的知识，再逐步变成故事、分镜和画面。</p><div className="prompt-progress"><i /></div><small>一支片子 · 五个步骤</small></div>
+        <div className="sidebar-prompt"><div className="prompt-mark"><Sparkles size={15} /></div><strong>想法先行</strong><p>写下想讲清楚的知识，再逐步变成故事、分镜和画面。</p><div className="prompt-progress"><i /></div><small>一支片子 · 六个步骤</small></div>
         <div className="sidebar-bottom"><div className="sidebar-profile"><div className="profile-avatar">V</div><div><strong>创作者工作台</strong><span>草稿保存在此浏览器</span></div><span className="profile-status" /></div><div className="sidebar-footnote"><LockKeyhole size={12} /> API 密钥只在当前页面会话中使用</div></div>
       </aside>
 
