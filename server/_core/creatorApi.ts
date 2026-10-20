@@ -283,8 +283,18 @@ export function registerCreatorApi(app: Express) {
         const message = [detail || `模型服务返回 HTTP ${upstream.status}。`, hint].filter(Boolean).join(" ");
         return res.status(502).json({ error: `连接失败：${message}` });
       }
+      const choices = result && typeof result === "object" ? (result as { choices?: unknown }).choices : null;
+      if (!Array.isArray(choices) || choices.length === 0) {
+        return res.status(502).json({ error: "接口返回成功状态，但响应缺少 Chat Completions 的 choices 字段。" });
+      }
       const reply = extractMessage(result);
-      if (!reply.trim()) return res.status(502).json({ error: "模型接口已响应，但没有返回可见文本；请检查所选模型的 Chat Completions 兼容性。" });
+      if (!reply.trim()) {
+        return res.json({
+          ok: true,
+          model: credentials.model,
+          warning: "接口已连通，但 8 Token 短探针没有可见文本；部分推理模型会把短输出预算用于推理。可继续尝试生成脚本。",
+        });
+      }
       return res.json({ ok: true, model: credentials.model });
     } catch (error) {
       if (error instanceof Error && (error.name === "AbortError" || /aborted/i.test(error.message))) {

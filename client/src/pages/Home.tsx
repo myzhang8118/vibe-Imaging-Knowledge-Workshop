@@ -108,7 +108,7 @@ function ModelSettingsDialog({
     setResult({ tone: "idle", text: "正在等待模型响应（最长约 60 秒）…" });
     try {
       const response = await testModelConnection(settings, apiKey);
-      setResult({ tone: "success", text: `连接成功。模型 ${response.model} 已返回有效回复。` });
+      setResult({ tone: "success", text: response.warning ? `模型 ${response.model}：${response.warning}` : `连接成功。模型 ${response.model} 已返回有效回复。` });
       saveModelSettings(settings);
     } catch (error) {
       setResult({ tone: "error", text: error instanceof Error ? error.message : "连接失败，请检查地址与密钥。" });

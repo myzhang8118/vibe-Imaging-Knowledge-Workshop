@@ -116,9 +116,9 @@ export async function testModelConnection(settings: ModelSettings, apiKey: strin
     cache: "no-store",
     body: JSON.stringify({ ...settings, apiKey }),
   });
-  const payload = await response.json().catch(() => ({})) as { ok?: boolean; model?: string; error?: string };
+  const payload = await response.json().catch(() => ({})) as { ok?: boolean; model?: string; error?: string; warning?: string };
   if (!response.ok || !payload.ok) throw new Error(payload.error || `连接失败（HTTP ${response.status}）`);
-  return { model: payload.model ?? settings.model };
+  return { model: payload.model ?? settings.model, warning: payload.warning };
 }
 
 export async function generateDraft(settings: ModelSettings, apiKey: string, idea: string): Promise<GeneratedDraft> {
