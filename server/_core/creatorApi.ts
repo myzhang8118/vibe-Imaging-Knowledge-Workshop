@@ -250,29 +250,39 @@ export function registerCreatorApi(app: Express) {
     return true;
   };
 
-  app.post("/api/creator/models", async (req, res) => {
+  app.post("/api/creator/test", async (req, res) => {
     if (!guard(req, res)) return;
     let apiKey = "";
     try {
       const credentials = validateCredentials(req.body as ModelInput);
       apiKey = credentials.apiKey;
+      if (!credentials.model) throw new Error("请先填写模型名称。");
       const baseUrl = await normalizePublicBaseUrl((req.body as ModelInput).baseUrl);
-      const upstream = await requestUpstream(`${baseUrl}/models`, apiKey, { method: "GET" });
+      const upstream = await requestUpstream(`${baseUrl}/chat/completions`, apiKey, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: credentials.model,
+          messages: [{ role: "user", content: "Reply with only OK." }],
+          max_tokens: 8,
+          temperature: 0,
+        }),
+      });
       if (upstream.status >= 300 && upstream.status < 400) {
         return res.status(502).json({ error: "API 地址返回了重定向，请填写最终 HTTPS 地址。" });
       }
-      const raw = upstream.text;
       let result: unknown;
-      try { result = JSON.parse(raw); } catch { result = null; }
+      try { result = JSON.parse(upstream.text); } catch { result = null; }
       if (!upstream.ok) {
         const providerError = result && typeof result === "object" ? (result as { error?: { message?: string } }).error?.message : undefined;
-        const message = typeof providerError === "string" ? safeUpstreamMessage(providerError, apiKey) : `模型服务返回 HTTP ${upstream.status}。`;
+        const detail = typeof providerError === "string" ? safeUpstreamMessage(providerError, apiKey) : "";
+        const hint = upstream.status === 404 ? "请检查 Base URL 的版本路径和模型名称。" : upstream.status === 401 || upstream.status === 403 ? "请检查 API Key、套餐专属 Key 及模型权限。" : "";
+        const message = [detail || `模型服务返回 HTTP ${upstream.status}。`, hint].filter(Boolean).join(" ");
         return res.status(502).json({ error: `连接失败：${message}` });
       }
-      const models = result && typeof result === "object" && Array.isArray((result as { data?: unknown }).data)
-        ? ((result as { data: Array<{ id?: unknown }> }).data).map(model => typeof model?.id === "string" ? model.id : "").filter(Boolean).slice(0, 30)
-        : [];
-      return res.json({ ok: true, modelCount: models.length, models });
+      const reply = extractMessage(result);
+      if (!reply.trim()) return res.status(502).json({ error: "模型接口已响应，但没有返回可见文本；请检查所选模型的 Chat Completions 兼容性。" });
+      return res.json({ ok: true, model: credentials.model });
     } catch (error) {
       const message = error instanceof Error ? safeUpstreamMessage(error.message, apiKey) : "模型连接失败，请检查设置。";
       return res.status(400).json({ error: message });

@@ -110,15 +110,15 @@ export function clearCreatorDraft() {
 }
 
 export async function testModelConnection(settings: ModelSettings, apiKey: string) {
-  const response = await fetch("/api/creator/models", {
+  const response = await fetch("/api/creator/test", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     cache: "no-store",
     body: JSON.stringify({ ...settings, apiKey }),
   });
-  const payload = await response.json().catch(() => ({})) as { ok?: boolean; models?: string[]; modelCount?: number; error?: string };
+  const payload = await response.json().catch(() => ({})) as { ok?: boolean; model?: string; error?: string };
   if (!response.ok || !payload.ok) throw new Error(payload.error || `连接失败（HTTP ${response.status}）`);
-  return { models: payload.models ?? [], modelCount: payload.modelCount ?? 0 };
+  return { model: payload.model ?? settings.model };
 }
 
 export async function generateDraft(settings: ModelSettings, apiKey: string, idea: string): Promise<GeneratedDraft> {
