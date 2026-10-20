@@ -109,7 +109,16 @@ function vitePluginManusDebugCollector(): Plugin {
             writeToLogFile("browserConsole", payload.consoleLogs);
           }
           if (payload.networkRequests?.length > 0) {
-            writeToLogFile("networkRequests", payload.networkRequests);
+            // Creator requests carry an API key in their POST body. Exclude the
+            // entire route from the development network log, not just headers.
+            const safeRequests = payload.networkRequests.filter((entry: unknown) => {
+              try {
+                return !JSON.stringify(entry).includes("/api/creator/");
+              } catch {
+                return false;
+              }
+            });
+            writeToLogFile("networkRequests", safeRequests);
           }
           if (payload.sessionEvents?.length > 0) {
             writeToLogFile("sessionReplay", payload.sessionEvents);
